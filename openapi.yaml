@@ -1,0 +1,130 @@
+openapi: 3.0.3
+info:
+  title: Production-Ready Job Queue System API
+  version: 1.0.0
+  description: API Spec for submitting, tracking, and managing background jobs.
+paths:
+  /api/v1/jobs:
+    post:
+      summary: Submit a new background job
+      operationId: submit_job
+      parameters:
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - job_type
+                - payload
+              properties:
+                job_type:
+                  type: string
+                  enum: [email, webhook, report, batch]
+                payload:
+                  type: object
+                priority:
+                  type: integer
+                  default: 0
+                  description: Higher value means higher priority.
+                scheduled_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        '201':
+          description: Job created or existing job returned (Idempotency hit)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+  /api/v1/jobs/{job_id}:
+    get:
+      summary: Get job status and results
+      operationId: get_job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobResponse'
+  /api/v1/jobs/{job_id}/cancel:
+    post:
+      summary: Cancel a pending or scheduled job
+      operationId: cancel_job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job successfully cancelled
+  /api/v1/health:
+    get:
+      summary: System health check and queue metrics
+      operationId: health_check
+      responses:
+        '200':
+          description: Healthy with metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  queue_stats:
+                    type: object
+                    properties:
+                      pending_count:
+                        type: integer
+                      processing_count:
+                        type: integer
+
+components:
+  schemas:
+    JobResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        job_type:
+          type: string
+        status:
+          type: string
+          enum: [SCHEDULED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED]
+        priority:
+          type: integer
+        current_attempts:
+          type: integer
+        max_attempts:
+          type: integer
+        progress:
+          type: integer
+        result:
+          type: object
+          nullable: true
+        error_info:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
