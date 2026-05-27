@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+from sqlalchemy import delete
 import asyncio
 import time
 from datetime import datetime, timedelta
@@ -101,25 +103,66 @@ async def process_job_lifecycle(job_id: str):
             await db.rollback()
             await handle_job_failure(job, str(e), db)
 
+async def run_cleanup_retention():
+    """
+    delete finished jobs that executed over 24 hours ago
+    """
+    logger.info("Starting database retention cleanup task...")
+
+    time_threshold = datetime.utcnow() - timedelta(hours=24)
+
+    async with AsyncSessionLocal() as db:
+        try:
+            stmt = (
+                delete(Job)
+                .where(Job.created_at < time_threshold)
+                .where(Job.status.in_([
+                    JobStatus.COMPLETED.value, 
+                    JobStatus.FAILED.value, 
+                    JobStatus.CANCELLED.value
+                ]))
+            )
+            result = await db.execute(stmt)
+            await db.commit()
+
+            logger.info(
+                "Database retention cleanup completed successfully", 
+                rows_deleted=result.rowcount
+            )
+        except Exception as e:
+            await db.rollback()
+            logger.error("Failed to run database cleanup task", error=str(e))
+
 async def worker_loop():
     """
-    The main worker function
+    main loop of the worker
     """
     logger.info("Worker process started and listening for jobs...")
     queue = JobQueue(redis_client)
-    
+
+    last_cleanup_time = 0
+    CLEANUP_INTERVAL_SECONDS = 3600
+
     while True:
         try:
+            current_time = time.time()
+
+            # 1. for test its one hour and not 24 hours
+            if current_time - last_cleanup_time > CLEANUP_INTERVAL_SECONDS:
+                await run_cleanup_retention()
+                last_cleanup_time = current_time
+
+            # 2. Scheduled to pending
             await queue.move_scheduled_to_pending()
-            
+
+            # 3. get next job to execute
             job_id = await fetch_next_job_id()
-            
             if job_id:
                 await process_job_lifecycle(job_id)
             else:
-                # avoid cpu over
+                # avoid cpu over usage
                 await asyncio.sleep(0.5)
-                
+
         except Exception as e:
             logger.critical("Critical error in worker loop", error=str(e))
             await asyncio.sleep(2)
