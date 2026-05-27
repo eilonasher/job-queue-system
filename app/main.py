@@ -1,4 +1,4 @@
-import uuid
+import timeimport uuid
 from fastapi import FastAPI, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -8,6 +8,8 @@ import structlog
 from app.database import get_db, engine, Base
 from app.models import Job
 from app.schemas import JobCreate, JobResponse, JobStatus
+from app.database import get_db, engine, Base, get_redis
+from app.queue import JobQueue 
 
 # Observability: use structLog to print logs that can be easily moitored. 
 logger = structlog.get_logger()
@@ -50,33 +52,41 @@ async def health_check():
 async def submit_job(
     job_data: JobCreate,
     x_idempotency_key: str = Header(..., alias="X-Idempotency-Key"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    redis_cli = Depends(get_redis) # הזרקת החיבור ל-Redis
 ):
     log = logger.bind(idempotency_key=x_idempotency_key, job_type=job_data.job_type)
     log.info("Received job submission request")
+
+    initial_status = JobStatus.SCHEDULED.value if job_data.scheduled_at else JobStatus.PENDING.value
 
     new_job = Job(
         job_type=job_data.job_type,
         payload=job_data.payload,
         priority=job_data.priority,
         idempotency_key=x_idempotency_key,
-        status=JobStatus.PENDING.value,
-        status=JobStatus.SCHEDULED.value if job_data.scheduled_at else JobStatus.PENDING.value,
+        status=initial_status,
         scheduled_at=job_data.scheduled_at
     )
 
     try:
         db.add(new_job)
-        await db.flush()
+        await db.flush() 
         
-        log.info("Job successfully created in database", job_id=str(new_job.id))
+        queue = JobQueue(redis_cli)
+        scheduled_timestamp = job_data.scheduled_at.timestamp() if job_data.scheduled_at else None
         
-        # TODO: reddis
+        await queue.enqueue_job(
+            job_id=str(new_job.id), 
+            priority=new_job.priority, 
+            scheduled_at_timestamp=scheduled_timestamp
+        )
         
+        log.info("Job successfully created and enqueued", job_id=str(new_job.id))
         return new_job
 
-    except IntegrityError: #Idempotency
-        await db.rollback() 
+    except IntegrityError:
+        await db.rollback()
         log.warning("Idempotency key collision detected. Fetching existing job.")
 
         query = select(Job).where(Job.idempotency_key == x_idempotency_key)
@@ -84,17 +94,9 @@ async def submit_job(
         existing_job = result.scalars().first()
 
         if not existing_job:
-            log.error("Integrity error occurred but job could not be retrieved")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
                 detail="Database integrity error"
             )
 
-        log.info(
-            "Returning existing job data", 
-            job_id=str(existing_job.id), 
-            job_status=existing_job.status
-        )
-        
         return existing_job
-        
