@@ -5,21 +5,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-class JobResponse(BaseModel):
-    id: UUID
-    job_type: str
-    status: JobStatus
-    priority: int
-    current_attempts: int
-    max_attempts: int
-    progress: int
-    result: Optional[Dict[str, Any]] = None
-    error_info: Optional[str] = None
-    created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    
-
 class JobStatus(str, Enum):
     SCHEDULED = "SCHEDULED"
     PENDING = "PENDING"
@@ -42,6 +27,20 @@ class JobCreate(BaseModel):
     priority: int = Field(default=0, ge=0, description="priority")
     scheduled_at: Optional[datetime] = Field(default=None, description="when to execute")
 
+
+class JobResponse(BaseModel):
+    id: UUID
+    job_type: str
+    status: JobStatus
+    priority: int
+    current_attempts: int
+    max_attempts: int
+    progress: int
+    result: Optional[Dict[str, Any]] = None
+    error_info: Optional[str] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None    
 
     class Config:
         from_attributes = True 
