@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 import asyncio
 import time
 from datetime import datetime, timedelta
@@ -16,8 +16,52 @@ from app.jobs.webhook import process_webhook_job
 from app.jobs.report import process_report_job
 from app.jobs.batch import process_batch_job
 from app.queue import QUEUE_PENDING, JobQueue
+from app.database import AsyncSessionLocal
+from app.models import Job
+from app.queue import JobQueue
 
 logger = structlog.get_logger()
+
+async def reap_stuck_jobs():
+    """
+    Background Monitor (Janitor/Reaper) loop.
+    Runs forever every 60 seconds, looks for jobs stuck in PROCESSING 
+    for more than 5 minutes, and recovers them.
+    """
+    queue = JobQueue(redis_client)
+    
+    while True:
+        try:
+            await asyncio.sleep(60)
+            
+            async with AsyncSessionLocal() as db:
+                timeout_threshold = datetime.utcnow() - timedelta(minutes=5)
+                
+                query = select(Job).where(
+                    Job.status == JobStatus.PROCESSING.value,
+                    Job.updated_at < timeout_threshold
+                )
+                result = await db.execute(query)
+                stuck_jobs = result.scalars().all()
+                
+                for job in stuck_jobs:
+                    if job.current_attempts < job.max_attempts:
+                        job.status = JobStatus.PENDING.value
+                        job.current_attempts += 1
+                        await queue.enqueue_job(job_id=str(job.id), priority=job.priority)
+                        logger.warning("Recovered stuck job, Re-queued for retry", job_id=str(job.id), attempt=job.current_attempts, delay=backoff_delay)
+                    else:
+                        job.status = JobStatus.FAILED.value
+                        job.error_info = "Worker crashed or timed out during execution (No heartbeats)."
+                        job.completed_at = datetime.utcnow()
+                        logger.error("Job failed permanently after max attempts", job_id=str(job.id))
+                        
+                if stuck_jobs:
+                    await db.commit()
+                    
+        except Exception as e:
+            await db.rollback()
+            logger.error("Exception in background crash recovery monitor", error=str(e))
 
 async def fetch_next_job_id() -> str | None:
     """
@@ -168,4 +212,5 @@ async def worker_loop():
             await asyncio.sleep(2)
 
 if __name__ == "__main__":
+    asyncio.create_task(reap_stuck_jobs())
     asyncio.run(worker_loop())
