@@ -11,6 +11,7 @@ What Helped Most
 What I Had to Fix
 [Describe 1-2 cases where AI gave incorrect advice - especially around concurrency]
 1. Edge case when worker crashes 
+2. Add SQLAlcehmy to get over redis limitiaions
 ##
 What AI Struggled With
 [Any parts where AI wasn't helpful]
