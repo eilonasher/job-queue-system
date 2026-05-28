@@ -55,7 +55,7 @@ async def submit_job(
     job_data: JobCreate,
     x_idempotency_key: str = Header(..., alias="X-Idempotency-Key"),
     db: AsyncSession = Depends(get_db),
-    redis_cli = Depends(get_redis) # הזרקת החיבור ל-Redis
+    redis_cli = Depends(get_redis) 
 ):
     log = logger.bind(idempotency_key=x_idempotency_key, job_type=job_data.job_type)
     log.info("Received job submission request")
